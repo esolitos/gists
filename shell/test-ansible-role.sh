@@ -97,7 +97,7 @@ function test_role {
     if [[ -x "$EXTRA_TEST_FILE" ]]; then
         # Run the extra tests
         /bin/bash "$EXTRA_TEST_FILE"
-    elif [[ ! -z "$EXTRA_TEST_FILE" ]]
+    elif [[ ! -z "$EXTRA_TEST_FILE" ]]; then
         # If a test file is specified and it's not executable consider it a fail.
         printf "\n${RED}Missing extra test file: ${EXTRA_TEST_FILE}.${NEUTRAL}\n\n"
         exit 1
