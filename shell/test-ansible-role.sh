@@ -23,6 +23,7 @@ function show_help {
     echo '-s --shell            Log in to running container'
     echo '-f --friendly-name    Sets a friendly container ID.'
     echo '-S --skip-idempotent  Skips the idempotence test.'
+    echo '-x --extra-test       Runs another script within the test environment. (Must be an executable file)'
 }
 
 
@@ -91,6 +92,14 @@ function test_role {
         tail $idempotence_log | grep -q 'changed=0.*failed=0' \
             && (printf "\n${GREEN}Idempotence test: PASS${NEUTRAL}\n\n" && exit 0) \
             || (printf "\n${GREEN}Idempotence test: ${RED}FAIL${NEUTRAL}\n\n" && exit 1)
+    fi
+
+    if [[ -x "$EXTRA_TEST_FILE" ]]; then
+        # Run the extra tests
+        source "$EXTRA_TEST_FILE"
+    else
+        printf "\n${RED}Missing extra test file: ${EXTRA_TEST_FILE}.${NEUTRAL}\n\n"
+        exit 1
     fi
 }
 
@@ -184,7 +193,13 @@ while [ "$#" -gt 0 ]; do
             SKIP_IDEMPOTENT=1
             shift
             ;;
-            
+
+        -x|--extra-test)
+            EXTRA_TEST_FILE="$2"
+            shift
+            shift
+            ;;
+
         *)
             show_error "$1"
             ;;
