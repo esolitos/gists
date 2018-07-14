@@ -37,8 +37,28 @@ fi
 
 # Set some default values if not provided in the config
 
+# Set verbosity level (Valid values: 0 -> 5)
+if [ $VERBOSE_LEVEL ]; then
+  case $VERBOSE_LEVEL in
+    ''|*[!0-9]*)
+      # Only accept numeric values
+      VERBOSE=''
+      ;;
+    *)
+      # Allow max 5 as verbosity
+      [ $VERBOSE_LEVEL -gt 5 ] && VERBOSE_LEVEL=5
+      VERBOSE=$(printf -- '-v%u' "$VERBOSE_LEVEL")
+      ;;
+  esac
+fi
+
+# Disable recoursive on demand
+if [ -z $NO_RECURSIVE ]; then
+  RECURSIVE='-recurse'
+fi
+
 # Destination base directory
-if [ -z "$DEST_BASEDIR" ]; then
+if [ -z $DEST_BASEDIR ]; then
   # Current directory
   DEST_BASEDIR='./'
 elif [ ! "${DEST_BASEDIR: -1}" = '/' ]; then
@@ -48,14 +68,14 @@ fi
 
 # Date format used for rename, note that this can be a path.
 # More info: https://sno.phy.queensu.ca/~phil/exiftool/filename.html
-if [ -z "$DEST_DATE_FORMAT" ]; then
+if [ -z $DEST_DATE_FORMAT ]; then
   # Group by year-month and start name with date of the shot
   DEST_DATE_FORMAT='%Y-%m/%Y-%m-%d'
 fi
 
 # Tag naming which will be directed to the `FileName` tag
 # More info: https://sno.phy.queensu.ca/~phil/exiftool/filename.html
-if [ -z "$DEST_FILENAME_FORMAT" ]; then
+if [ -z $DEST_FILENAME_FORMAT ]; then
   # Use date from $DEST_DATE_FORMAT, camera model and original filename tags by default
   DEST_FILENAME_FORMAT='${DateTimeOriginal}.${Model;tr/ /_/}.${FileName}'
 fi
@@ -64,6 +84,9 @@ fi
 DATE_FMT="'${DEST_BASEDIR}${DEST_DATE_FORMAT}'"
 FILENAME_FMT="'-filename<${DEST_FILENAME_FORMAT}'"
 
-printf "\nOutput base directory is: ${GREEN}${DEST_BASEDIR}${NEUTRAL}\n"
+printf "\nInput directory: ${GREEN}${SRC_DIR}${NEUTRAL}\n"
+printf "Output base directory: ${GREEN}${DEST_BASEDIR}${NEUTRAL}\n"
 
-sh -c "exiftool -preserve -ext NEF -out . -dateFormat $DATE_FMT $FILENAME_FMT $SRC_DIR"
+sh -c "exiftool ${VERBOSE} ${RECURSIVE} -preserve -ext NEF -out . -dateFormat ${DATE_FMT} ${FILENAME_FMT} ${SRC_DIR}"
+
+# Done
