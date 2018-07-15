@@ -91,6 +91,6 @@ FILENAME_FMT="'-filename<${DEST_FILENAME_FORMAT}'"
 printf "\nInput directory: ${GREEN}${SRC_DIR}${NEUTRAL}\n"
 printf "Output base directory: ${GREEN}${DEST_BASEDIR}${NEUTRAL}\n"
 
-sh -c "exiftool ${VERBOSE} ${RECURSIVE} -preserve -ext NEF -out . -dateFormat ${DATE_FMT} ${FILENAME_FMT} ${SRC_DIR}"
+sh -c "exiftool ${VERBOSE} ${RECURSIVE} -preserve -ext NEF -out . -dateFormat ${DATE_FMT} ${FILENAME_FMT} '${SRC_DIR}'"
 
 # Done
