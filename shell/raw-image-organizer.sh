@@ -3,6 +3,10 @@
 # Takes all the NEF files from a directory and copies them to $DEST_BASEDIR grouped
 # by year-month directories and renames them based on DEST_FILENAME_FORMAT.
 #
+# More info:
+# - https://ninedegreesbelow.com/photography/exiftool-commands.html
+# - https://sno.phy.queensu.ca/~phil/exiftool/
+# - 
 
 set -e
 if [ $DEBUG ]; then
