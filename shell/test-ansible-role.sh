@@ -1,261 +1,133 @@
 #!/bin/bash
+#
 # Test Ansile role inside container
 #
 # Inspired by the wonderful work of Jeff Geerling (@geerlingguy)
 # https://gist.github.com/geerlingguy/73ef1e5ee45d8694570f334be385e181
 # and @samdoran
 # https://gist.github.com/samdoran/c3d392ee697881fa33a1d1a65814a07b
+#
+# Usage: [OPTIONS] ./tests/test.sh
+#   - distro: a supported Docker distro version (default = "centos7")
+#   - playbook: a playbook in the tests directory (default = "test.yml")
+#   - role_dir: the directory where the role exists (default = $PWD)
+#   - cleanup: whether to remove the Docker container (default = true)
+#   - container_id: the --name to set for the container (default = timestamp)
+#   - test_idempotence: whether to test playbook's idempotence (default = true)
+#
+# If you place a requirements.yml file in tests/requirements.yml, the
+# requirements listed inside that file will be installed via Ansible Galaxy
+# prior to running tests.
+#
+# License: MIT
 
-# Colors
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-NEUTRAL='\033[0m'
+# Exit on any individual command failure.
+set -e
 
+# Pretty colors.
+red='\033[0;31m'
+green='\033[0;32m'
+neutral='\033[0m'
 
-function show_help {
-    echo '-h --help             Print out help'
-    echo '-D --destroy          Stop and destroy test container'
-    echo '-r --role-path        Path to role. Defaults to current directory'
-    echo '-i --image            Docker image OS to run. Defaults to geerlingguy/docker-${DISTRO}-ansible:latest'
-    echo '-d --distribution     Image distribution to run. Defaults to centos7'
-    echo '-o --run-options      Run options passed to container'
-    echo '-p --playbook         Name of playbook to run inside tests/.'
-    echo '-s --shell            Log in to running container'
-    echo '-f --friendly-name    Sets a friendly container ID.'
-    echo '-S --skip-idempotent  Skips the idempotence test.'
-    echo '-x --extra-test       Runs another script within the test environment. (Must be an executable file)'
-}
+timestamp=$(date +%s)
 
+# Allow environment variables to override defaults.
+distro=${distro:-"rockylinux8"}
+playbook=${playbook:-"test.yml"}
+role_dir=${role_dir:-"$PWD"}
+cleanup=${cleanup:-"true"}
+container_id=${container_id:-$timestamp}
+test_idempotence=${test_idempotence:-"true"}
 
-function show_error {
-    echo "Unknown option: '$1'"
-    exit 1
-}
-
-
-function show_ansible_version {
-    docker exec --tty "$CONTAINER_ID" ansible --version
-}
-
-
-function run_container {
-    # Sanity check to make sure this is a role
-    if [[ ! -d "$ROLE_PATH/tasks" ]]; then
-        echo "This does not appear to be a valid role."
-        exit 1
-    else
-        running_containers=$(docker ps -f status=running --format '{{.Names}}')
-
-        # Run container in detached state if it's not already running
-        if [[ ! "$running_containers" =~ "$CONTAINER_ID" ]]; then
-            echo "Running container $CONTAINER_ID"
-            docker run --detach \
-                --volume="$ROLE_PATH":"$ROLE_PATH_IN_CONTAINER":ro \
-                --name $CONTAINER_ID \
-                $RUN_OPTS \
-                $IMAGE_NAME \
-                $INIT
-        else
-            echo "Container $CONTAINER_ID already running. Continuing..."
-        fi
-
-        # Install dependencies
-        if [[ -f "$ROLE_PATH/$REQUIREMENTS_FILE" ]]; then
-            echo "Installing role dependencies"
-            docker exec --tty "$CONTAINER_ID" ansible-galaxy install -r "$ROLE_PATH_IN_CONTAINER/$REQUIREMENTS_FILE"
-        fi
-
-    fi
-
-}
-
-
-function test_role {
-    run_container
-    show_ansible_version
-
-    # Ansible syntax check.
-    printf ${GREEN}"Checking role syntax..."${NEUTRAL}
-    docker exec --tty "$CONTAINER_ID" ansible-playbook "${ROLE_PATH_IN_CONTAINER}/tests/${PLAYBOOK}" --syntax-check > /dev/null
-    printf "${GREEN}PASS\n"${NEUTRAL}
-
-    # Test role.
-    printf "\n${GREEN}Running the role...${NEUTRAL}\n"
-    docker exec --tty "$CONTAINER_ID" ansible-playbook "${ROLE_PATH_IN_CONTAINER}/tests/${PLAYBOOK}" --skip-tags skipci
-
-    if [[ ! $SKIP_IDEMPOTENT ]]; then
-        # Test role idempotence.
-        printf "\n${GREEN}Testing role idempotence...${NEUTRAL}\n\n"
-        idempotence_log=$(mktemp)
-        docker exec --tty "$CONTAINER_ID" ansible-playbook "${ROLE_PATH_IN_CONTAINER}/tests/${PLAYBOOK}" --skip-tags skipci | tee -a $idempotence_log
-
-        tail $idempotence_log | grep -q 'changed=0.*failed=0' \
-            && (printf "\n${GREEN}Idempotence test: PASS${NEUTRAL}\n\n" && exit 0) \
-            || (printf "\n${GREEN}Idempotence test: ${RED}FAIL${NEUTRAL}\n\n" && exit 1)
-    fi
-
-    if [[ -x "$EXTRA_TEST_FILE" ]]; then
-        # Run the extra tests
-        /bin/bash "$EXTRA_TEST_FILE"
-    elif [[ ! -z "$EXTRA_TEST_FILE" ]]; then
-        # If a test file is specified and it's not executable consider it a fail.
-        printf "\n${RED}Missing extra test file: ${EXTRA_TEST_FILE}.${NEUTRAL}\n\n"
-        exit 1
-    fi
-}
-
-
-function destroy_container {
-    echo "Stopping and removing $1"
-    docker stop "$1" > /dev/null
-    docker rm "$1" > /dev/null
-}
-
-
-function get_shell {
-    run_container
-
-    echo
-    echo "Logging in to $1"
-    echo "To run the test inside the container run"
-    echo "ansible-playbook ${ROLE_PATH_IN_CONTAINER}/tests/${PLAYBOOK}"
-    echo
-
-    docker exec -it "$1" bash
-}
-
-
-# --- Main --- #
-
-ROLE_PATH_IN_CONTAINER="/usr/share/ansible/roles/role_under_test"
-PLAYBOOK=test.yml
-REQUIREMENTS_FILE="tests/requirements.yml"
-
-# Get command line options
-while [ "$#" -gt 0 ]; do
-    case "$1" in
-        -h|--help)
-            show_help
-            shift
-            exit 0
-            ;;
-
-        -D|--destroy)
-            ACTION='destroy'
-            shift
-            ;;
-
-        -r|--role-path)
-            ROLE_PATH="$2"
-            shift
-            shift
-            ;;
-
-        -o|--run-options)
-            RUN_OPTS="$2"
-            shift
-            shift
-            ;;
-
-        -p|--playbook)
-            PLAYBOOK="$2"
-            shift
-            shift
-            ;;
-
-        -i|--image)
-            IMAGE_NAME="$2"
-            shift
-            shift
-            ;;
-
-        -d|--distribution)
-            DISTRO="$2"
-            shift
-            shift
-            ;;
-
-        -s|--shell)
-            ACTION='shell'
-            shift
-            ;;
-
-        -t|--test-only)
-            ACTION='test'
-            shift
-            ;;
-
-        -f|--friendly-name)
-            FRIENDLY_NAME=1
-            shift
-            ;;
-            
-        -S|--skip-idempotent)
-            SKIP_IDEMPOTENT=1
-            shift
-            ;;
-
-        -x|--extra-test)
-            EXTRA_TEST_FILE="$2"
-            shift
-            shift
-            ;;
-
-        *)
-            show_error "$1"
-            ;;
-    esac
-
-done
-
-ACTION=${ACTION:-'run'}
-DISTRO=${DISTRO:-'centos7'}
-ROLE_PATH="${ROLE_PATH:-$(pwd)}"
-IMAGE_NAME=${IMAGE_NAME:-"geerlingguy/docker-${DISTRO}-ansible:latest"}
-CONTAINER_ID=${CONTAINER_ID:-$(date +%s)}
-
-if [[ $FRIENDLY_NAME ]]; then
-    CONTAINER_PREFIX=$(basename "$ROLE_PATH")
-    CONTAINER_ID="$CONTAINER_PREFIX-$DISTRO-test"
+## Set up vars for Docker setup.
+# Rocky Linux 9
+if [ $distro = 'rockylinux9' ]; then
+  init="/usr/lib/systemd/systemd"
+  opts="--privileged --cgroupns=host --volume=/sys/fs/cgroup:/sys/fs/cgroup:rw"
+# Rocky Linux 8
+elif [ $distro = 'rockylinux8' ]; then
+  init="/usr/lib/systemd/systemd"
+  opts="--privileged --cgroupns=host --volume=/sys/fs/cgroup:/sys/fs/cgroup:rw"
+# CentOS 7
+elif [ $distro = 'centos7' ]; then
+  init="/usr/lib/systemd/systemd"
+  opts="--privileged --cgroupns=host --volume=/sys/fs/cgroup:/sys/fs/cgroup:rw"
+# Ubuntu 22.04
+elif [ $distro = 'ubuntu2204' ]; then
+  init="/lib/systemd/systemd"
+  opts="--privileged --cgroupns=host --volume=/var/lib/docker --volume=/sys/fs/cgroup:/sys/fs/cgroup:rw"
+# Ubuntu 20.04
+elif [ $distro = 'ubuntu2004' ]; then
+  init="/lib/systemd/systemd"
+  opts="--privileged --cgroupns=host --volume=/var/lib/docker --volume=/sys/fs/cgroup:/sys/fs/cgroup:rw"
+# Ubuntu 18.04
+elif [ $distro = 'ubuntu1804' ]; then
+  init="/lib/systemd/systemd"
+  opts="--privileged --cgroupns=host --volume=/var/lib/docker --volume=/sys/fs/cgroup:/sys/fs/cgroup:rw"
+# Debian 12
+elif [ $distro = 'debian12' ]; then
+  init="/lib/systemd/systemd"
+  opts="--privileged --cgroupns=host --volume=/var/lib/docker --volume=/sys/fs/cgroup:/sys/fs/cgroup:rw"
+# Debian 11
+elif [ $distro = 'debian11' ]; then
+  init="/lib/systemd/systemd"
+  opts="--privileged --cgroupns=host --volume=/var/lib/docker --volume=/sys/fs/cgroup:/sys/fs/cgroup:rw"
+# Debian 10
+elif [ $distro = 'debian10' ]; then
+  init="/lib/systemd/systemd"
+  opts="--privileged --cgroupns=host --volume=/var/lib/docker --volume=/sys/fs/cgroup:/sys/fs/cgroup:rw"
+# Fedora 38
+elif [ $distro = 'fedora38' ]; then
+  init="/usr/lib/systemd/systemd"
+  opts="--privileged --cgroupns=host --volume=/var/lib/docker --volume=/sys/fs/cgroup:/sys/fs/cgroup:rw"
+# Fedora 37
+elif [ $distro = 'fedora37' ]; then
+  init="/usr/lib/systemd/systemd"
+  opts="--privileged --cgroupns=host --volume=/var/lib/docker --volume=/sys/fs/cgroup:/sys/fs/cgroup:rw"
+# Fedora 36
+elif [ $distro = 'fedora36' ]; then
+  init="/usr/lib/systemd/systemd"
+  opts="--privileged --cgroupns=host --volume=/var/lib/docker --volume=/sys/fs/cgroup:/sys/fs/cgroup:rw"
 fi
 
-# Set container run options based on distribution
-case "$DISTRO" in
+# Run the container using the supplied OS.
+printf ${green}"Starting Docker container: geerlingguy/docker-$distro-ansible."${neutral}"\n"
+docker pull geerlingguy/docker-$distro-ansible:latest
+docker run --detach --volume="$role_dir":/etc/ansible/roles/role_under_test:rw --name $container_id $opts geerlingguy/docker-$distro-ansible:latest $init
 
-    # Ubuntu withb
-    ubuntu1804|ubuntu1604 )
-        INIT="/lib/systemd/systemd"
-        RUN_OPTS="--privileged --volume=/var/lib/docker --volume=/sys/fs/cgroup:/sys/fs/cgroup:ro"
-        ;;
+printf "\n"
 
-    debian8|debian9 )
-        INIT="/lib/systemd/systemd"
-        RUN_OPTS="--privileged --volume=/var/lib/docker --volume=/sys/fs/cgroup:/sys/fs/cgroup:ro"
-        ;;
+# Install requirements if `requirements.yml` is present.
+if [ -f "$role_dir/tests/requirements.yml" ]; then
+  printf ${green}"Requirements file detected; installing dependencies."${neutral}"\n"
+  docker exec --tty $container_id env TERM=xterm ansible-galaxy install -r /etc/ansible/roles/role_under_test/tests/requirements.yml
+fi
 
-    * )
-        echo "Unsupported distribution $DISTRO"
-        exit 2
-        ;;
-esac
+printf "\n"
 
-# Do the work
-case "$ACTION" in
-    shell)
-        run_container --skip-tags skipci
-        get_shell "$CONTAINER_ID"
-        ;;
+# Test Ansible syntax.
+printf ${green}"Checking Ansible playbook syntax."${neutral}
+docker exec --tty $container_id env TERM=xterm ansible-playbook /etc/ansible/roles/role_under_test/tests/$playbook --syntax-check
 
-    run)
-        test_role --skip-tags skipci
-        destroy_container "$CONTAINER_ID"
-        ;;
+printf "\n"
 
-    destroy)
-        destroy_container "$CONTAINER_ID"
-        ;;
+# Run Ansible playbook.
+printf ${green}"Running command: docker exec $container_id env TERM=xterm ansible-playbook /etc/ansible/roles/role_under_test/tests/$playbook"${neutral}
+docker exec $container_id env TERM=xterm env ANSIBLE_FORCE_COLOR=1 ansible-playbook /etc/ansible/roles/role_under_test/tests/$playbook
 
-    test)
-        test_role
-        ;;
-esac
+if [ "$test_idempotence" = true ]; then
+  # Run Ansible playbook again (idempotence test).
+  printf ${green}"Running playbook again: idempotence test"${neutral}
+  idempotence=$(mktemp)
+  docker exec $container_id ansible-playbook /etc/ansible/roles/role_under_test/tests/$playbook | tee -a $idempotence
+  tail $idempotence \
+    | grep -q 'changed=0.*failed=0' \
+    && (printf ${green}'Idempotence test: pass'${neutral}"\n") \
+    || (printf ${red}'Idempotence test: fail'${neutral}"\n" && exit 1)
+fi
+
+# Remove the Docker container (if configured).
+if [ "$cleanup" = true ]; then
+  printf "Removing Docker container...\n"
+  docker rm -f $container_id
+fi
