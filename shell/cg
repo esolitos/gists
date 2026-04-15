@@ -1,0 +1,165 @@
+#!/usr/bin/env python3
+"""cg — git repo directory navigator.
+
+Prints the resolved path to stdout; all prompts go to stderr.
+Wrap with a shell function so the parent shell can cd:
+
+    function cg() { local d; d=$(command cg "$@") && cd "$d"; }
+"""
+
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+GIT_ROOT = Path.home() / "git"
+_EXCLUDE = {".links", "_links"}
+
+
+def parse_input(arg: str) -> tuple[str | None, str]:
+    """Parse arg into (org_or_none, repo).
+
+    Accepts GitHub URLs, org/repo, or bare repo names.
+    """
+    m = re.match(r"https?://github\.com/([^/]+)/([^/]+?)(?:\.git|/|$)", arg)
+    if m:
+        return m.group(1), m.group(2)
+    if "/" in arg:
+        org, _, repo = arg.partition("/")
+        return org, repo
+    return None, arg
+
+
+def disk_candidates(org: str | None, repo: str) -> list[str]:
+    """Return candidate on-disk names to check.
+
+    vespaai repos may have the 'yahoo-' prefix dropped on disk,
+    so searching for 'yahoo-foo' also checks 'foo'.
+    """
+    names = [repo]
+    if (org is None or org.lower() == "vespaai") and repo.lower().startswith("yahoo-"):
+        names.append(repo[len("yahoo-"):])
+    return names
+
+
+def find_repos(org: str | None, repo: str) -> list[Path]:
+    """Search ~/git/ for repos matching org + repo."""
+    candidates = {n.lower() for n in disk_candidates(org, repo)}
+    org_filter = org.lower() if org else None
+    results: list[Path] = []
+
+    try:
+        with os.scandir(GIT_ROOT) as org_it:
+            for org_entry in org_it:
+                if not org_entry.is_dir(follow_symlinks=False):
+                    continue
+                if org_entry.name in _EXCLUDE or org_entry.name.startswith("."):
+                    continue
+                if org_filter and org_entry.name.lower() != org_filter:
+                    continue
+
+                try:
+                    with os.scandir(org_entry.path) as repo_it:
+                        for repo_entry in repo_it:
+                            if repo_entry.is_dir(follow_symlinks=False) and repo_entry.name.lower() in candidates:
+                                results.append(Path(repo_entry.path))
+                except PermissionError:
+                    continue
+    except FileNotFoundError:
+        pass
+
+    return results
+
+
+def pick_one(matches: list[Path]) -> Path | None:
+    """Prompt the user to select one path from multiple matches."""
+    print("Multiple repositories found:", file=sys.stderr)
+    for i, p in enumerate(matches, 1):
+        print(f"  {i}) {p.relative_to(GIT_ROOT)}", file=sys.stderr)
+    try:
+        raw = input(f"Select [1-{len(matches)}]: ").strip()
+        idx = int(raw) - 1
+        if 0 <= idx < len(matches):
+            return matches[idx]
+        print("Invalid selection.", file=sys.stderr)
+    except (ValueError, EOFError, KeyboardInterrupt):
+        print("\nAborted.", file=sys.stderr)
+    return None
+
+
+def ask_clone(spec: str) -> bool:
+    """Prompt Y/n to confirm cloning."""
+    try:
+        ans = input(f"'{spec}' not found locally. Clone it? [Y/n] ").strip().lower()
+        return ans in ("", "y", "yes")
+    except (EOFError, KeyboardInterrupt):
+        print("\nAborted.", file=sys.stderr)
+        return False
+
+
+def clone_repo(org: str, repo: str) -> Path | None:
+    """Clone org/repo under ~/git/org/repo/ via gh."""
+    dest = GIT_ROOT / org / repo
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    rc = subprocess.run(["gh", "repo", "clone", f"{org}/{repo}", str(dest)]).returncode
+    return dest if rc == 0 else None
+
+
+def main() -> int:
+    args = sys.argv[1:]
+
+    if not args or args[0] in ("-h", "--help"):
+        print("Usage: cg <repo|org/repo|github-url>", file=sys.stderr)
+        return 0 if args else 1
+
+    if sys.stdout.isatty():
+        print(
+            "cg: run as a shell function, not directly — add to ~/.zshrc:\n"
+            "    function cg() { local d; d=$(command cg \"$@\") && cd \"$d\"; }",
+            file=sys.stderr,
+        )
+        return 1
+
+    if len(args) > 1:
+        print("cg: too many arguments.", file=sys.stderr)
+        return 1
+
+    org, repo = parse_input(args[0].strip())
+    repo = repo.removesuffix(".git")
+
+    matches = find_repos(org, repo)
+
+    if len(matches) == 1:
+        print(matches[0])
+        return 0
+
+    if len(matches) > 1:
+        chosen = pick_one(matches)
+        if chosen:
+            print(chosen)
+            return 0
+        return 1
+
+    # Not found locally — offer to clone
+    if org is None:
+        print(
+            f"cg: no local match for '{repo}'. Provide org/repo or a GitHub URL to clone.",
+            file=sys.stderr,
+        )
+        return 1
+
+    spec = f"{org}/{repo}"
+    if ask_clone(spec):
+        dest = clone_repo(org, repo)
+        if dest:
+            print(dest)
+            return 0
+        print("cg: clone failed.", file=sys.stderr)
+        return 1
+
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
