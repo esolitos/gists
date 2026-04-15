@@ -27,6 +27,7 @@ def parse_input(arg: str) -> tuple[str | None, str]:
         return m.group(1), m.group(2)
     if "/" in arg:
         org, _, repo = arg.partition("/")
+        repo = repo.partition("#")[0]  # strip #issue / #pr suffix
         return org, repo
     return None, arg
 
@@ -78,7 +79,8 @@ def pick_one(matches: list[Path]) -> Path | None:
     for i, p in enumerate(matches, 1):
         print(f"  {i}) {p.relative_to(GIT_ROOT)}", file=sys.stderr)
     try:
-        raw = input(f"Select [1-{len(matches)}]: ").strip()
+        print(f"Select [1-{len(matches)}]: ", end="", flush=True, file=sys.stderr)
+        raw = sys.stdin.readline().strip()
         idx = int(raw) - 1
         if 0 <= idx < len(matches):
             return matches[idx]
@@ -91,7 +93,8 @@ def pick_one(matches: list[Path]) -> Path | None:
 def ask_clone(spec: str) -> bool:
     """Prompt Y/n to confirm cloning."""
     try:
-        ans = input(f"'{spec}' not found locally. Clone it? [Y/n] ").strip().lower()
+        print(f"'{spec}' not found locally. Clone it? [Y/n] ", end="", flush=True, file=sys.stderr)
+        ans = sys.stdin.readline().strip().lower()
         return ans in ("", "y", "yes")
     except (EOFError, KeyboardInterrupt):
         print("\nAborted.", file=sys.stderr)
